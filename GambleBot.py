@@ -6,18 +6,46 @@ logging.basicConfig(level=logging.INFO)
 
 # Обработчик команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Проверяем, отображалось ли приветственное сообщение ранее
+    if not context.user_data.get("start_shown", False):
+        # Приветственное сообщение только для первого раза
+        user_name = update.effective_user.first_name or "Игрок"
+        welcome_message = (
+            f"Привет, {user_name}! 👋\n"
+            "Добро пожаловать в игровой бот. 🎮 Здесь вы можете поиграть в мини-игры:\n\n"
+            "🎲 Кости\n"
+            "🃏 Карточная игра 21\n"
+            "🎰 Рулетка\n\n"
+            "Выберите игру ниже, чтобы начать. Удачи! 🍀"
+        )
+        await update.message.reply_text(welcome_message)
+
+        # Устанавливаем флаг, что приветствие показано
+        context.user_data["start_shown"] = True
+
+    # Вывод стандартного меню
+    await send_game_menu(update)
+
+async def send_game_menu(update: Update) -> None:
+    # Кнопки выбора игр
     keyboard = [
-        [InlineKeyboardButton("🎰Рулетка", callback_data="game_roulette")],
-        [InlineKeyboardButton("🃏Карточная игра 21", callback_data="game_21")],
-        [InlineKeyboardButton("🎲Кости", callback_data="game_dice")]
+        [InlineKeyboardButton("🎰 Рулетка", callback_data="game_roulette")],
+        [InlineKeyboardButton("🃏 Карточная игра 21", callback_data="game_21")],
+        [InlineKeyboardButton("🎲 Кости", callback_data="game_dice")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text("Выберите игру 🎮:", reply_markup=reply_markup)
+
+    # Отправка стандартного меню
+    if update.callback_query:
+        # Если вызов из кнопки "Назад"
+        await update.callback_query.edit_message_text("Выберите игру 🎮:", reply_markup=reply_markup)
+    else:
+        # Если вызов из команды /start
+        await update.message.reply_text("Выберите игру 🎮:", reply_markup=reply_markup)
 
 # Обработчик выбора игры
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
-    logging.info(f"Обработчик кнопки: {query.data}")
     await query.answer()  # Подтвердить обработку запроса
 
      # Рулетка
@@ -44,7 +72,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await play_dice(query, context)
     # Назад к меню
     elif query.data == "back_to_menu":
-        await start(query, context)
+        await send_game_menu(update)
 
 # Кнопки "Играть снова" и "Назад"
 def end_game_buttons(game: str):
@@ -172,7 +200,7 @@ async def hit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if user_data["sum"] > 21:
         await update.message.reply_text(
-            f"Вы взяли карту {new_card}. Ваши карты: {user_data['cards']} (сумма: {user_data['sum']}). Вы проиграли!😞 Начните новую игру с /start."
+            f"Вы взяли карту {new_card}. Ваши карты: {user_data['cards']} (сумма: {user_data['sum']}). Вы проиграли!😞 Начните новую игру с /start.",reply_markup=end_game_buttons("21")
         )
         del context.user_data["game_21"]
     else:
@@ -195,7 +223,7 @@ async def stand(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
     await update.message.reply_text(
         f"Ваши карты: {user_data['cards']} (сумма: {user_data['sum']}). Карты бота: {bot_sum}. {result}\n"
-        "Начните новую игру с /start."
+        "Начните новую игру с /start.",reply_markup=end_game_buttons("21")
     )
     del context.user_data["game_21"]
 
@@ -210,18 +238,38 @@ async def play_21(query, context) -> None:
     context.user_data["game_21"] = {"cards": user_cards, "sum": user_sum}
 
 # Игра "Кости"
-async def play_dice(query, context) -> None:
-    player_roll = random.randint(1, 6) + random.randint(1, 6)
-    bot_roll = random.randint(1, 6) + random.randint(1, 6)
-    result = "Вы выиграли!🎉" if player_roll > bot_roll else "Вы проиграли!😞" if player_roll < bot_roll else "Ничья!🤝"
+async def play_dice(query: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = query.message.chat_id
+    
+    # Бросок двух кубиков для игрока
+    player_dice_1 = await context.bot.send_dice(chat_id, emoji="🎲")
+    player_dice_2 = await context.bot.send_dice(chat_id, emoji="🎲")
+    player_score = player_dice_1.dice.value + player_dice_2.dice.value
+
+    # Бросок двух кубиков для бота
+    bot_dice_1 = await context.bot.send_dice(chat_id, emoji="🎲")
+    bot_dice_2 = await context.bot.send_dice(chat_id, emoji="🎲")
+    bot_score = bot_dice_1.dice.value + bot_dice_2.dice.value
+
+    # Определяем победителя
+    if player_score > bot_score:
+        result = "Вы выиграли!🎉"
+    elif player_score < bot_score:
+        result = "Вы проиграли!😞"
+    else:
+        result = "Ничья!🤝"
+
+    # Отображаем результат
     await query.edit_message_text(
-        f"Ваш бросок: {player_roll}. Бросок бота: {bot_roll}. {result}",
+        f"Ваши очки: {player_score} (🎲 {player_dice_1.dice.value}, 🎲 {player_dice_2.dice.value})\n"
+        f"Очки бота: {bot_score} (🎲 {bot_dice_1.dice.value}, 🎲 {bot_dice_2.dice.value})\n"
+        f"{result}",
         reply_markup=end_game_buttons("dice")
     )
 
 # Основной код
 if __name__ == "__main__":
-    TOKEN = "7802757253:AAGcbtFt3kikbs6zr4fDpuBZD-DqDDZuZKY"
+    TOKEN = "YOUR_TOKEN" #Токен Телеграм бота
     app = ApplicationBuilder().token(TOKEN).build()
 
     # Обработчики
